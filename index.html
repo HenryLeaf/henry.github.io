@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Cyberpunk City - LOW FLYING & MAX BANG</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #000;
+            touch-action: none;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+        }
+        .scanlines {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none;
+            background: linear-gradient(
+                to bottom,
+                rgba(255,255,255,0),
+                rgba(255,255,255,0) 50%,
+                rgba(0,0,0,0.1) 50%,
+                rgba(0,0,0,0.1)
+            );
+            background-size: 100% 4px;
+            z-index: 5;
+            opacity: 0.1;
+        }
+        .tip {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            color: #0ff;
+            font-family: 'Courier New', Courier, monospace;
+            font-weight: bold;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            pointer-events: none;
+            text-shadow: 2px 2px 0px #f0f;
+            animation: glitch 1s infinite alternate, fadeOut 5s forwards;
+            z-index: 10;
+            text-align: center;
+            width: 100%;
+        }
+        @keyframes glitch {
+            0% { opacity: 1; transform: translate(-50%, -50%) skewX(0deg); }
+            20% { opacity: 0.8; transform: translate(-52%, -50%) skewX(-10deg); }
+            40% { opacity: 1; transform: translate(-48%, -50%) skewX(10deg); }
+            100% { opacity: 1; transform: translate(-50%, -50%) skewX(0deg); }
+        }
+        @keyframes fadeOut {
+            0%, 70% { opacity: 1; }
+            100% { opacity: 0; }
+        }
+    </style>
+</head>
+<body>
+<div class="tip">HAPPY NEW YEAR // TAP SKY</div>
+<div class="scanlines"></div>
+<canvas id="canvas"></canvas>
+
+<script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+
+    ctx.imageSmoothingEnabled = false;
+
+    const isMobile = window.innerWidth < 600;
+    const PIXEL_SCALE = isMobile ? 2 : 3;
+    const SPEED_FACTOR = 0.2;
+
+    let width, height;
+    let particles = [];
+    let buildings = [];
+    let vehicles = [];
+    let trafficLights = [];
+
+    let lastTime = 0;
+    let timer = 0;
+
+    const WINDOW_COLORS = ['#fffae5', '#fff5b8', '#e0f7fa', '#a5f3fc'];
+    const TYPE0_COLORS = ['#ff2a6d', '#05d9e8', '#fff', '#ffD700'];
+    const TYPE1_COLORS = ['#FFD700', '#FF4500', '#E066FF', '#00FF7F'];
+    const TYPE2_PAIRS = [['#00FFFF', '#FF00FF'], ['#FFD700', '#FF0000'], ['#FFFFFF', '#0000FF'], ['#00FF00', '#FFFF00']];
+    const TYPE3_COLORS = ['#FFFFFF', '#E0E0E0', '#F0F8FF'];
+
+    // ----------------------
+    // 地面车灯
+    // ----------------------
+    class TrafficLight {
+        constructor() {
+            this.direction = Math.random() > 0.5 ? 1 : -1;
+            this.x = this.direction === 1 ? -100 : width + 100;
+            this.speed = (Math.random() * 4 + 3) * 60 * SPEED_FACTOR;
+            this.length = Math.random() * 120 + 100;
+            this.spread = Math.random() * 20 + 10;
+            const isHeadlight = Math.random() > 0.3;
+            this.rgb = isHeadlight ? '210, 240, 255' : '255, 20, 40';
+            this.alpha = Math.random() * 0.15 + 0.01;
+        }
+        update(dt) { this.x += this.speed * this.direction * dt; }
+        draw() {
+            const endX = this.x + (this.length * this.direction);
+            const grad = ctx.createLinearGradient(this.x, height, endX, height - this.spread/2);
+            grad.addColorStop(0, `rgba(${this.rgb}, ${this.alpha})`);
+            grad.addColorStop(1, `rgba(${this.rgb}, 0)`);
+            ctx.fillStyle = grad;
+            ctx.globalCompositeOperation = 'lighter';
+            ctx.beginPath();
+            ctx.moveTo(this.x, height + 5);
+            ctx.lineTo(endX, height - this.spread);
+            ctx.lineTo(endX, height);
+            ctx.closePath();
+            ctx.fill();
+            ctx.globalCompositeOperation = 'source-over';
+        }
+    }
+
+    // ----------------------
+    // 悬浮车
+    // ----------------------
+    class Vehicle {
+        constructor() {
+            // [关键修改] 高度限制在城市轮廓内
+            // 0.55 (屏幕中部偏下) 到 0.9 (接近地面)
+            // 这样汽车就会穿梭在建筑物之间，而不是飞在天上
+            const minY = height * 0.55;
+            const maxY = height * 0.90;
+
+            this.y = Math.random() * (maxY - minY) + minY;
+            this.direction = Math.random() > 0.5 ? 1 : -1;
+            this.x = this.direction === 1 ? -20 : width + 20;
+            this.speed = (Math.random() * 0.8 + 0.4) * 60 * SPEED_FACTOR;
+            this.blinkOffset = Math.random() * 10;
+        }
+        update(dt) { this.x += this.speed * this.direction * dt; }
+        draw(currTime) {
+            const dx = Math.floor(this.x);
+            const dy = Math.floor(this.y);
+
+            ctx.fillStyle = '#111';
+            ctx.fillRect(dx, dy, 6, 2);
+
+            ctx.fillStyle = this.direction === 1 ? 'rgba(0,255,255,0.9)' : 'rgba(255,0,255,0.9)';
+            const tailX = this.direction === 1 ? dx - 1 : dx + 6;
+            ctx.fillRect(tailX, dy, 1, 1);
+
+            const blink = Math.floor((currTime + this.blinkOffset) * 3) % 2 === 0;
+            if (blink) {
+                ctx.fillStyle = Math.random() > 0.5 ? '#f00' : '#00f';
+                ctx.fillRect(dx + 2, dy - 1, 2, 1);
+            }
+        }
+    }
+
+    // ----------------------
+    // 城市系统
+    // ----------------------
+    function initCity() {
+        buildings = [];
+        let currentX = -10;
+        while (currentX < width) {
+            const bWidth = Math.floor(Math.random() * 20 + 12);
+            const maxH = isMobile ? 0.55 : 0.45;
+            const minH = 0.1;
+            const bHeight = Math.floor(Math.random() * (height * maxH) + (height * minH));
+
+            const building = {
+                x: currentX, y: height - bHeight, w: bWidth, h: bHeight,
+                type: Math.floor(Math.random() * 3),
+                windows: [],
+                hasAntenna: Math.random() > 0.6 && bHeight > height * 0.2
+            };
+            const rows = Math.floor(bHeight / 5);
+            const cols = Math.floor(bWidth / 4);
+            for(let r=1; r<rows; r++) {
+                for(let c=0; c<cols; c++) {
+                    if(Math.random() < 0.15) {
+                        building.windows.push({
+                            relX: 2 + c * 4, relY: 4 + r * 5,
+                            color: WINDOW_COLORS[Math.floor(Math.random() * WINDOW_COLORS.length)]
+                        });
+                    }
+                }
+            }
+            buildings.push(building);
+            currentX += bWidth - 1;
+        }
+    }
+
+    function drawCity(currTime) {
+        buildings.forEach(b => {
+            ctx.fillStyle = '#0a0a12';
+            ctx.fillRect(b.x, b.y, b.w, b.h);
+            ctx.fillStyle = 'rgba(120, 100, 220, 0.3)';
+            ctx.fillRect(b.x + b.w - 1, b.y, 1, b.h);
+            if (b.type === 1) {
+                ctx.fillStyle='#0a0a12';
+                ctx.fillRect(b.x + 3, b.y - 4, b.w - 6, 4);
+            } else if (b.type === 2) {
+                ctx.fillStyle='#0a0a12';
+                ctx.fillRect(b.x + 4, b.y - 3, b.w - 8, 3);
+                ctx.fillRect(b.x + b.w/2 - 1, b.y - 6, 2, 3);
+            }
+            if (b.hasAntenna) {
+                ctx.fillStyle = '#222';
+                ctx.fillRect(b.x + b.w/2, b.y - 8, 1, 8);
+                if (Math.floor(currTime * 1.5) % 2 === 0) {
+                    ctx.fillStyle = '#f00';
+                    ctx.fillRect(b.x + b.w/2, b.y - 8, 1, 1);
+                }
+            }
+            b.windows.forEach(w => {
+                ctx.fillStyle = w.color;
+                ctx.fillRect(b.x + w.relX, b.y + w.relY, 1, 2);
+            });
+        });
+    }
+
+    function resize() {
+        width = canvas.width = Math.ceil(window.innerWidth / PIXEL_SCALE);
+        height = canvas.height = Math.ceil(window.innerHeight / PIXEL_SCALE);
+        ctx.imageSmoothingEnabled = false;
+        initCity();
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // ----------------------
+    // 粒子系统 (MAX EXPLOSION)
+    // ----------------------
+    class Particle {
+        constructor(x, y, color, type, speedOverride = null) {
+            this.x = x;
+            this.y = y;
+            this.color = color;
+            this.type = type;
+
+            this.history = [];
+            this.maxHistory = 10;
+            this.life = 1.0;
+            this.baseSize = isMobile ? 2 : 1;
+
+            const angle = Math.random() * Math.PI * 2;
+            let speed = 0;
+
+            // [关键修改] 爆炸力度极大增强 (Max Range)
+            if (speedOverride !== null) {
+                speed = speedOverride;
+            } else {
+                if (this.type === 0) speed = (Math.random() * 6 + 4); // 基础: 4~10
+                else if (this.type === 1) speed = (Math.random() * 4 + 2); // 垂柳: 2~6
+                else if (this.type === 3) speed = (Math.random() * 7 + 5); // 爆珠: 5~12 (巨大)
+            }
+
+            if (this.type === 0 || this.type === 2) {
+                this.friction = 0.97; // 阻力更小，飞得更远
+                this.gravity = 0.8;
+                this.decay = (Math.random() * 0.02 + 0.01) * 60 * 0.2;
+            } else if (this.type === 1) {
+                this.friction = 0.97;
+                this.gravity = 1.2;
+                this.decay = (Math.random() * 0.01 + 0.005) * 60 * 0.2;
+            } else if (this.type === 3) {
+                this.friction = 0.88;
+                this.gravity = 0.3;
+                this.decay = (Math.random() * 0.03 + 0.02) * 60 * 0.2;
+            }
+
+            const velocity = speed * 60 * SPEED_FACTOR;
+            this.vx = Math.cos(angle) * velocity;
+            this.vy = Math.sin(angle) * velocity;
+        }
+
+        update(dt) {
+            if (this.type === 1) {
+                this.history.push({x: this.x, y: this.y});
+                if (this.history.length > this.maxHistory) this.history.shift();
+            }
+            if (this.type === 3) {
+                this.x += (Math.random() - 0.5) * 2;
+                this.y += (Math.random() - 0.5) * 2;
+            }
+            this.x += this.vx * dt;
+            this.y += this.vy * dt;
+            this.vx *= this.friction;
+            this.vy *= this.friction;
+            this.vy += this.gravity * 60 * dt * SPEED_FACTOR;
+            this.life -= this.decay * dt;
+        }
+
+        draw() {
+            if (this.life <= 0) return;
+            const dx = Math.floor(this.x);
+            const dy = Math.floor(this.y);
+            const size = this.baseSize;
+
+            if (this.type === 1) {
+                for(let i=0; i<this.history.length; i++) {
+                    const point = this.history[i];
+                    ctx.globalAlpha = (i / this.history.length) * this.life;
+                    ctx.fillStyle = this.color;
+                    ctx.fillRect(Math.floor(point.x), Math.floor(point.y), size, size);
+                }
+                ctx.globalAlpha = this.life;
+                ctx.fillStyle = '#fff';
+                ctx.fillRect(dx, dy, size, size);
+            }
+            else if (this.type === 2) {
+                ctx.globalAlpha = this.life;
+                ctx.fillStyle = this.color;
+                ctx.fillRect(dx, dy, size, size);
+            }
+            else if (this.type === 3) {
+                if (Math.random() > 0.5) return;
+                ctx.globalAlpha = this.life;
+                ctx.fillStyle = Math.random() > 0.5 ? '#fff' : this.color;
+                ctx.fillRect(dx, dy, size + 1, size + 1);
+            }
+            else {
+                if (this.life < 0.4 && Math.random() > this.life * 2) return;
+                ctx.globalAlpha = this.life;
+                ctx.fillStyle = this.life > 0.8 ? '#fff' : this.color;
+                ctx.fillRect(dx, dy, size, size);
+            }
+            ctx.globalAlpha = 1.0;
+        }
+    }
+
+    function createFirework(x, y) {
+        x = Math.floor(x);
+        y = Math.floor(y);
+        const type = Math.floor(Math.random() * 4);
+
+        ctx.fillStyle = '#fff';
+        const startSize = isMobile ? 4 : 3;
+        ctx.fillRect(x-1, y-1, startSize, startSize);
+
+        if (type === 0) {
+            const color = TYPE0_COLORS[Math.floor(Math.random() * TYPE0_COLORS.length)];
+            for (let i = 0; i < 80; i++) particles.push(new Particle(x, y, color, 0));
+        }
+        else if (type === 1) {
+            const color = TYPE1_COLORS[Math.floor(Math.random() * TYPE1_COLORS.length)];
+            for (let i = 0; i < 100; i++) particles.push(new Particle(x, y, color, 1));
+        }
+        else if (type === 2) {
+            const pair = TYPE2_PAIRS[Math.floor(Math.random() * TYPE2_PAIRS.length)];
+            const outerColor = pair[0];
+            const innerColor = pair[1];
+            // 极速双层牡丹
+            for (let i = 0; i < 90; i++) {
+                const speed = Math.random() * 3.0 + 6.0; // 极快
+                particles.push(new Particle(x, y, outerColor, 2, speed));
+            }
+            for (let i = 0; i < 50; i++) {
+                const speed = Math.random() * 2.0 + 2.0;
+                particles.push(new Particle(x, y, innerColor, 2, speed));
+            }
+        }
+        else {
+            const color = TYPE3_COLORS[Math.floor(Math.random() * TYPE3_COLORS.length)];
+            for (let i = 0; i < 60; i++) particles.push(new Particle(x, y, color, 3));
+        }
+    }
+
+    function autoLaunch() {
+        const fx = Math.random() * width;
+        const fy = Math.random() * (height * 0.4);
+        createFirework(fx, fy);
+    }
+
+    function loop(timestamp) {
+        requestAnimationFrame(loop);
+
+        if (!lastTime) lastTime = timestamp;
+        const dt = Math.min((timestamp - lastTime) / 1000, 0.1);
+        lastTime = timestamp;
+
+        timer += dt;
+
+        const skyGrad = ctx.createLinearGradient(0, 0, 0, height);
+        skyGrad.addColorStop(0, '#050520');
+        skyGrad.addColorStop(1, '#151030');
+        ctx.fillStyle = skyGrad;
+        ctx.fillRect(0, 0, width, height);
+
+        const hazeGrad = ctx.createLinearGradient(0, height * 0.3, 0, height);
+        hazeGrad.addColorStop(0, 'rgba(0, 0, 0, 0)');
+        hazeGrad.addColorStop(0.6, 'rgba(60, 30, 90, 0.3)');
+        hazeGrad.addColorStop(1, 'rgba(100, 60, 180, 0.6)');
+        ctx.fillStyle = hazeGrad;
+        ctx.fillRect(0, height * 0.3, width, height * 0.7);
+
+        for (let i = particles.length - 1; i >= 0; i--) {
+            particles[i].update(dt);
+            particles[i].draw();
+            if (particles[i].life <= 0) particles.splice(i, 1);
+        }
+
+        drawCity(timer);
+
+        if (Math.random() < 0.25 * dt) vehicles.push(new Vehicle());
+        for (let i = vehicles.length - 1; i >= 0; i--) {
+            vehicles[i].update(dt);
+            vehicles[i].draw(timer);
+            if (vehicles[i].x < -30 || vehicles[i].x > width + 30) vehicles.splice(i, 1);
+        }
+
+        if (Math.random() < 2.4 * dt) trafficLights.push(new TrafficLight());
+        for (let i = trafficLights.length - 1; i >= 0; i--) {
+            trafficLights[i].update(dt);
+            trafficLights[i].draw();
+            if (trafficLights[i].x < -200 || trafficLights[i].x > width + 200) {
+                trafficLights.splice(i, 1);
+            }
+        }
+    }
+
+    function handleInput(e) {
+        e.preventDefault();
+        let cx, cy;
+        if(e.touches && e.touches.length > 0) {
+            cx = e.touches[0].clientX;
+            cy = e.touches[0].clientY;
+        } else {
+            cx = e.clientX;
+            cy = e.clientY;
+        }
+        createFirework(cx / PIXEL_SCALE, cy / PIXEL_SCALE);
+    }
+
+    canvas.addEventListener('mousedown', handleInput);
+    canvas.addEventListener('touchstart', handleInput, {passive: false});
+
+    setInterval(() => {
+        if(Math.random() < 0.8) {
+            autoLaunch();
+            if(Math.random() < 0.3) {
+                setTimeout(autoLaunch, 150);
+            }
+        }
+    }, 400);
+
+    initCity();
+    requestAnimationFrame(loop);
+</script>
+</body>
+</html>
